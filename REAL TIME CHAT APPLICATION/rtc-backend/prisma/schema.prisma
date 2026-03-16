@@ -1,0 +1,72 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         Int       @id @default(autoincrement())
+  email      String    @unique
+  username   String
+  password   String
+  members    Member[]
+  messages   Message[]
+  bans       Ban[]     @relation("BannedUser")
+  bannedOnes Ban[]     @relation("BannedBy")
+}
+
+model Server {
+  id         Int       @id @default(autoincrement())
+  name       String
+  inviteCode String    @unique @default(uuid())
+  channels   Channel[]
+  members    Member[]
+  bans       Ban[]
+}
+
+model Channel {
+  id       Int       @id @default(autoincrement())
+  name     String
+  serverId Int
+  server   Server    @relation(fields: [serverId], references: [id])
+  messages Message[]
+}
+
+model Member {
+  id       Int    @id @default(autoincrement())
+  role     String // "OWNER", "ADMIN", "MEMBER"
+  userId   Int
+  serverId Int
+  user     User   @relation(fields: [userId], references: [id])
+  server   Server @relation(fields: [serverId], references: [id])
+}
+
+model Message {
+  id        Int      @id @default(autoincrement())
+  content   String
+  isEdited  Boolean  @default(false)
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  userId    Int
+  channelId Int
+  user      User     @relation(fields: [userId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id])
+}
+
+model Ban {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  serverId   Int
+  bannedById Int
+  expiresAt  DateTime? // null = ban définitif
+  createdAt  DateTime  @default(now())
+  user       User      @relation(name: "BannedUser", fields: [userId], references: [id])
+  banner     User      @relation(name: "BannedBy", fields: [bannedById], references: [id])
+  server     Server    @relation(fields: [serverId], references: [id])
+
+  @@unique([userId, serverId])
+}
