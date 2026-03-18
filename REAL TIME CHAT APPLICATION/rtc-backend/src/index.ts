@@ -115,10 +115,10 @@ app.post('/servers/join', authMiddleware, async (req: any, res: any) => {
     });
     if (ban) {
       if (!ban.expiresAt || ban.expiresAt > new Date()) {
-        const msg = ban.expiresAt
-          ? `Vous êtes banni jusqu'au ${new Date(ban.expiresAt).toLocaleString('fr-FR')}`
-          : 'Vous êtes banni définitivement de ce serveur';
-        return res.status(403).json({ error: msg });
+        const errorCode = ban.expiresAt
+          ? `ban_temporary:${ban.expiresAt.toISOString()}`
+          : 'ban_permanent';
+        return res.status(403).json({ error: errorCode });
       }
       // Ban expiré : le supprimer automatiquement
       await (prisma as any).ban.delete({ where: { id: ban.id } });
@@ -140,7 +140,7 @@ app.post('/servers/join', authMiddleware, async (req: any, res: any) => {
     if (firstCh) {
       const sysMsg = await prisma.message.create({
         data: {
-          content: 'a rejoint le serveur',
+          content: 'system.joined',
           userId: req.user.userId,
           channelId: firstCh.id,
           isSystem: true
@@ -253,7 +253,7 @@ app.delete('/servers/:id/members/:userId/kick', authMiddleware, async (req: any,
     if (firstCh) {
       const sysMsg = await prisma.message.create({
         data: {
-          content: 'a été expulsé du serveur',
+          content: 'system.kicked',
           userId: targetUserId,
           channelId: firstCh.id,
           isSystem: true
@@ -304,8 +304,8 @@ app.post('/servers/:id/members/:userId/ban', authMiddleware, async (req: any, re
       const sysMsg = await prisma.message.create({
         data: {
           content: expiresAt
-            ? `a été banni temporairement jusqu'au ${expiresAt.toLocaleString('fr-FR')}`
-            : 'a été banni définitivement du serveur',
+            ? `system.banned_temporary:${expiresAt.toISOString()}`
+            : 'system.banned_permanent',
           userId: targetUserId,
           channelId: firstCh.id,
           isSystem: true
@@ -553,6 +553,32 @@ io.on('connection', (socket) => {
     socketData.delete(socket.id);
     console.log('User disconnected:', socket.id);
   });
+});
+
+// ─── GIF SEARCH ───────────────────────────────────────────────────────────────
+
+app.get('/gif/search', authMiddleware, async (req: any, res: any) => {
+  const q = String(req.query.q || '').trim();
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  if (!q) return res.status(400).json({ error: 'Missing query' });
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey || apiKey === 'your_giphy_api_key_here')
+    return res.status(503).json({ error: 'GIF service not configured' });
+  try {
+    const url = `https://api.giphy.com/v1/gifs/search?api_key=${apiKey}&q=${encodeURIComponent(q)}&limit=${limit}&rating=g&lang=fr`;
+    const response = await fetch(url);
+    const data: any = await response.json();
+    const gifs = (data.data || []).map((r: any) => ({
+      id: r.id,
+      url: r.images?.original?.url || '',
+      preview: r.images?.fixed_height_small?.url || r.images?.original?.url || '',
+      title: r.title || '',
+    }));
+    res.json({ gifs });
+  } catch (e) {
+    console.error('Giphy error:', e);
+    res.status(500).json({ error: 'Failed to fetch GIFs' });
+  }
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────

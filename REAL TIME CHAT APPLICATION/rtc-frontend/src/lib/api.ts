@@ -62,6 +62,10 @@ export const createChannel = (serverId: number, name: string) =>
 export const deleteChannel = (channelId: number) =>
   request(`/channels/${channelId}`, { method: 'DELETE' });
 
+// GIF
+export const searchGifs = (query: string) =>
+  request(`/gif/search?q=${encodeURIComponent(query)}&limit=20`);
+
 // Messages
 export const getMessages = (channelId: number) => request(`/channels/${channelId}/messages`);
 export const editMessage = (messageId: number, content: string) =>

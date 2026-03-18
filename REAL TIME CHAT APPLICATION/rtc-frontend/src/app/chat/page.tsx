@@ -9,8 +9,10 @@ import {
   createChannel, deleteChannel,
   getMessages, editMessage, deleteMessage,
   getMembers, updateMemberRole, transferOwnership, kickMember,
-  banMember, unbanMember, getBans
+  banMember, unbanMember, getBans, searchGifs
 } from '@/lib/api';
+import { useLanguage } from '@/contexts/LanguageContext';
+import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +38,8 @@ interface Message {
 }
 
 interface OnlineUser { userId: number; username: string; }
+
+interface GifResult { id: string; url: string; preview: string; title: string; }
 
 interface Ban {
   id: number;
@@ -67,6 +71,7 @@ function Modal({ title, children, onClose }: {
 
 export default function ChatPage() {
   const router = useRouter();
+  const { t, locale } = useLanguage();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [activeServer, setActiveServer] = useState<Server | null>(null);
@@ -102,6 +107,13 @@ export default function ChatPage() {
   const [banDuration, setBanDuration] = useState<string>(''); // vide = permanent
   const [bans, setBans] = useState<Ban[]>([]);
 
+  // GIF picker
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifResults, setGifResults] = useState<GifResult[]>([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const gifSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
@@ -110,10 +122,10 @@ export default function ChatPage() {
   // ─── Init ─────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    const t = localStorage.getItem('token');
+    const tk = localStorage.getItem('token');
     const u = localStorage.getItem('user');
-    if (!t || !u) { router.replace('/login'); return; }
-    token.current = t;
+    if (!tk || !u) { router.replace('/login'); return; }
+    token.current = tk;
     setCurrentUser(JSON.parse(u));
 
     getServers().then((data: Server[]) => {
@@ -199,7 +211,6 @@ export default function ChatPage() {
       setTypingUsers(prev => prev.filter(u => u !== username));
     });
 
-    // Mise à jour de rôle en temps réel
     socket.on('member_role_updated', ({ serverId, userId, role }: { serverId: number; userId: number; role: string }) => {
       setAllMembers(prev => prev.map(m => m.userId === userId ? { ...m, role } : m));
       if (userId === currentUser.id) {
@@ -208,7 +219,6 @@ export default function ChatPage() {
       }
     });
 
-    // Kick d'un membre en temps réel
     socket.on('user_kicked', ({ serverId, userId }: { serverId: number; userId: number }) => {
       setAllMembers(prev => prev.filter(m => m.userId !== userId));
       setOnlineList(prev => prev.filter(u => u.userId !== userId));
@@ -223,7 +233,6 @@ export default function ChatPage() {
       }
     });
 
-    // Ban d'un membre en temps réel
     socket.on('user_banned', ({ serverId, userId }: { serverId: number; userId: number }) => {
       setAllMembers(prev => prev.filter(m => m.userId !== userId));
       setOnlineList(prev => prev.filter(u => u.userId !== userId));
@@ -238,7 +247,6 @@ export default function ChatPage() {
       }
     });
 
-    // Transfert d'ownership en temps réel
     socket.on('ownership_transferred', ({ serverId, newOwnerId, oldOwnerId }: {
       serverId: number; newOwnerId: number; oldOwnerId: number;
     }) => {
@@ -299,9 +307,6 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Pas de document.addEventListener : on utilise des overlays transparents à la place
-  // (le listener document se déclenche avant que React traite le onClick et remet tout à null)
-
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   const isAdmin = activeServer?.userRole === 'OWNER' || activeServer?.userRole === 'ADMIN';
@@ -315,7 +320,7 @@ export default function ChatPage() {
   function initials(name: string) { return name.slice(0, 2).toUpperCase(); }
 
   function formatTime(iso: string) {
-    return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    return new Date(iso).toLocaleTimeString(locale === 'fr' ? 'fr-FR' : 'en-GB', { hour: '2-digit', minute: '2-digit' });
   }
 
   function roleBadge(role: string) {
@@ -324,11 +329,33 @@ export default function ChatPage() {
     return null;
   }
 
+  function translateSystemMessage(content: string): string {
+    if (content === 'system.joined') return t.system.joined;
+    if (content === 'system.kicked') return t.system.kicked;
+    if (content === 'system.banned_permanent') return t.system.bannedPermanent;
+    if (content.startsWith('system.banned_temporary:')) {
+      const isoDate = content.slice('system.banned_temporary:'.length);
+      const date = new Date(isoDate).toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB');
+      return `${t.system.bannedTemporary} ${date}`;
+    }
+    return content;
+  }
+
+  function translateError(error: string): string {
+    if (error === 'ban_permanent') return t.errors.banPermanent;
+    if (error.startsWith('ban_temporary:')) {
+      const isoDate = error.slice('ban_temporary:'.length);
+      const date = new Date(isoDate).toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB');
+      return `${t.errors.banTemporary} ${date}`;
+    }
+    return error;
+  }
+
   function typingText() {
     if (typingUsers.length === 0) return null;
-    if (typingUsers.length === 1) return `${typingUsers[0]} est en train d'écrire...`;
-    if (typingUsers.length === 2) return `${typingUsers[0]} et ${typingUsers[1]} écrivent...`;
-    return `${typingUsers.length} personnes écrivent...`;
+    if (typingUsers.length === 1) return `${typingUsers[0]} ${t.chat.isTyping}`;
+    if (typingUsers.length === 2) return `${typingUsers[0]} et ${typingUsers[1]} ${t.chat.areTyping}`;
+    return `${typingUsers.length} ${t.chat.manyTyping}`;
   }
 
   // Membres groupés par rôle pour le panneau
@@ -363,6 +390,34 @@ export default function ChatPage() {
     });
     setInputValue('');
     stopTyping();
+  }
+
+  // ─── GIF ──────────────────────────────────────────────────────────────────
+
+  function handleGifQueryChange(val: string) {
+    setGifQuery(val);
+    if (gifSearchTimerRef.current) clearTimeout(gifSearchTimerRef.current);
+    if (!val.trim()) { setGifResults([]); return; }
+    gifSearchTimerRef.current = setTimeout(async () => {
+      setGifLoading(true);
+      try {
+        const data = await searchGifs(val.trim());
+        setGifResults(data.gifs || []);
+      } catch { setGifResults([]); }
+      finally { setGifLoading(false); }
+    }, 400);
+  }
+
+  function sendGif(gif: GifResult) {
+    if (!activeChannel) return;
+    getSocket().emit('send_message', {
+      token: token.current,
+      content: `[gif]${gif.url}`,
+      channelId: activeChannel.id
+    });
+    setShowGifPicker(false);
+    setGifQuery('');
+    setGifResults([]);
   }
 
   // ─── Typing ───────────────────────────────────────────────────────────────
@@ -437,7 +492,7 @@ export default function ChatPage() {
       setServers(prev => [...prev, srv]);
       selectServer(srv);
       setModal(null);
-    } catch (err: any) { setModalError(err.message); }
+    } catch (err: any) { setModalError(translateError(err.message)); }
   }
 
   async function handleDeleteServer() {
@@ -560,8 +615,8 @@ export default function ChatPage() {
           </button>
         ))}
         <div className="server-divider" />
-        <button className="server-icon server-icon-add" onClick={() => openModal('createServer')} title="Créer un serveur">+</button>
-        <button className="server-icon" onClick={() => openModal('joinServer')} title="Rejoindre un serveur" style={{ fontSize: 12 }}>🔗</button>
+        <button className="server-icon server-icon-add" onClick={() => openModal('createServer')} title={t.chat.createServer}>+</button>
+        <button className="server-icon" onClick={() => openModal('joinServer')} title={t.chat.joinServer} style={{ fontSize: 12 }}>🔗</button>
       </nav>
 
       {/* ── Col 2 : channels ────────────────────────────────────────────── */}
@@ -578,29 +633,23 @@ export default function ChatPage() {
               <span style={{ color: '#96989d', fontSize: 12 }}>▼</span>
               {showServerMenu && (
                 <div className="server-dropdown" onClick={e => e.stopPropagation()}>
-                  {/* Invitation : OWNER ou ADMIN */}
                   {isAdmin && (
-                    <button onClick={() => openModal('invite')}>Copier l'invitation</button>
+                    <button onClick={() => openModal('invite')}>{t.chat.copyInvite}</button>
                   )}
-                  {/* Créer channel : OWNER ou ADMIN */}
                   {isAdmin && (
-                    <button onClick={() => openModal('createChannel')}>Créer un channel</button>
+                    <button onClick={() => openModal('createChannel')}>{t.chat.createChannel}</button>
                   )}
-                  {/* Gérer membres : OWNER ou ADMIN */}
                   {isAdmin && (
-                    <button onClick={() => openModal('manageMembers')}>Gérer les membres</button>
+                    <button onClick={() => openModal('manageMembers')}>{t.chat.manageMembers}</button>
                   )}
-                  {/* Gérer les bans : OWNER ou ADMIN */}
                   {isAdmin && (
-                    <button onClick={openManageBans}>Gérer les bans</button>
+                    <button onClick={openManageBans}>{t.chat.manageBans}</button>
                   )}
-                  {/* Quitter : MEMBER et ADMIN */}
                   {!isOwner && (
-                    <button className="danger" onClick={() => openModal('leaveServer')}>Quitter le serveur</button>
+                    <button className="danger" onClick={() => openModal('leaveServer')}>{t.chat.leaveServer}</button>
                   )}
-                  {/* Supprimer : OWNER ou ADMIN */}
                   {isAdmin && (
-                    <button className="danger" onClick={() => openModal('deleteServer')}>Supprimer le serveur</button>
+                    <button className="danger" onClick={() => openModal('deleteServer')}>{t.chat.deleteServer}</button>
                   )}
                 </div>
               )}
@@ -608,15 +657,15 @@ export default function ChatPage() {
 
             {/* Rôle */}
             <div style={{ padding: '4px 16px 8px', fontSize: 12, color: '#72767d' }}>
-              {roleBadge(activeServer.userRole) ?? <span>Membre</span>}
+              {roleBadge(activeServer.userRole) ?? <span>{t.chat.member}</span>}
             </div>
 
             {/* Liste channels */}
             <div className="channel-sidebar-body">
               <div className="channel-section-label">
-                <span>Salons</span>
+                <span>{t.chat.channels}</span>
                 {isAdmin && (
-                  <button className="icon-btn" onClick={() => openModal('createChannel')} title="Créer">+</button>
+                  <button className="icon-btn" onClick={() => openModal('createChannel')} title={t.chat.create}>+</button>
                 )}
               </div>
               {activeServer.channels.map(ch => (
@@ -632,21 +681,21 @@ export default function ChatPage() {
                       <button
                         className="icon-btn danger"
                         onClick={e => { e.stopPropagation(); handleDeleteChannel(ch); }}
-                        title="Supprimer"
+                        title={t.chat.deleteChannel}
                       >✕</button>
                     </div>
                   )}
                 </div>
               ))}
               {activeServer.channels.length === 0 && (
-                <div style={{ padding: '8px 16px', fontSize: 13, color: '#72767d' }}>Aucun channel</div>
+                <div style={{ padding: '8px 16px', fontSize: 13, color: '#72767d' }}>{t.chat.noChannel}</div>
               )}
             </div>
           </>
         ) : (
           <div style={{ padding: 16, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <p style={{ fontSize: 13, color: '#72767d', textAlign: 'center' }}>
-              Créez ou rejoignez un serveur
+              {t.chat.joinOrCreate}
             </p>
           </div>
         )}
@@ -656,9 +705,12 @@ export default function ChatPage() {
           <div className="user-avatar">{initials(currentUser.username)}</div>
           <div className="user-info">
             <div className="username">{currentUser.username}</div>
-            <div className="tag">{activeServer ? roleBadge(activeServer.userRole) ?? 'Membre' : 'En ligne'}</div>
+            <div className="tag">{activeServer ? roleBadge(activeServer.userRole) ?? t.chat.member : t.chat.online}</div>
           </div>
-          <button className="btn-logout" onClick={logout} title="Se déconnecter">⏻</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <LanguageSwitcher />
+            <button className="btn-logout" onClick={logout} title={t.chat.logout}>⏻</button>
+          </div>
         </div>
       </aside>
 
@@ -674,7 +726,7 @@ export default function ChatPage() {
             <div className="chat-messages">
               {messages.length === 0 && (
                 <div className="empty-state" style={{ flex: 1 }}>
-                  <p>Premier message dans <strong>#{activeChannel.name}</strong> !</p>
+                  <p>{t.chat.firstMessage} <strong>#{activeChannel.name}</strong> !</p>
                 </div>
               )}
               {messages.map(msg => {
@@ -684,7 +736,7 @@ export default function ChatPage() {
                       <span className="system-message-icon">👋</span>
                       <span>
                         <strong style={{ color: '#b9bbbe' }}>{msg.user.username}</strong>{' '}
-                        {msg.content}
+                        {translateSystemMessage(msg.content)}
                       </span>
                     </div>
                   );
@@ -706,8 +758,17 @@ export default function ChatPage() {
                             onKeyDown={e => handleEditKey(e, msg.id)}
                             autoFocus
                           />
-                          <div className="edit-hint">Entrée pour valider · Échap pour annuler</div>
+                          <div className="edit-hint">{t.chat.editHint}</div>
                         </>
+                      ) : msg.content.startsWith('[gif]') ? (
+                        <div className="message-content">
+                          <img
+                            className="message-gif"
+                            src={msg.content.slice(5)}
+                            alt="GIF"
+                            loading="lazy"
+                          />
+                        </div>
                       ) : (
                         <div className={`message-content${msg.isEdited ? ' edited' : ''}`}>
                           {msg.content}
@@ -716,10 +777,10 @@ export default function ChatPage() {
                     </div>
                     <div className="message-actions">
                       {msg.userId === currentUser.id && editingId !== msg.id && (
-                        <button className="icon-btn" title="Modifier" onClick={() => startEdit(msg)}>✏️</button>
+                        <button className="icon-btn" title={t.chat.editMessage} onClick={() => startEdit(msg)}>✏️</button>
                       )}
                       {(msg.userId === currentUser.id || isAdmin) && (
-                        <button className="icon-btn danger" title="Supprimer" onClick={() => handleDeleteMessage(msg.id)}>🗑️</button>
+                        <button className="icon-btn danger" title={t.chat.deleteMessage} onClick={() => handleDeleteMessage(msg.id)}>🗑️</button>
                       )}
                     </div>
                   </div>
@@ -733,10 +794,44 @@ export default function ChatPage() {
             </div>
 
             <div className="chat-input-area">
+              {showGifPicker && (
+                <div className="gif-picker">
+                  <input
+                    className="gif-search-input"
+                    placeholder={t.chat.gifSearchPlaceholder}
+                    value={gifQuery}
+                    onChange={e => handleGifQueryChange(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="gif-grid">
+                    {gifLoading && <div className="gif-loading">{t.chat.gifLoading}</div>}
+                    {!gifLoading && gifResults.map(gif => (
+                      <img
+                        key={gif.id}
+                        className="gif-item"
+                        src={gif.preview}
+                        alt={gif.title}
+                        title={gif.title}
+                        onClick={() => sendGif(gif)}
+                        loading="lazy"
+                      />
+                    ))}
+                    {!gifLoading && gifQuery && gifResults.length === 0 && (
+                      <div className="gif-empty">{t.chat.gifEmpty}</div>
+                    )}
+                  </div>
+                </div>
+              )}
               <form className="chat-input-wrapper" onSubmit={sendMessage}>
+                <button
+                  type="button"
+                  className="btn-gif"
+                  title="GIF"
+                  onClick={() => { setShowGifPicker(v => !v); setGifQuery(''); setGifResults([]); }}
+                >GIF</button>
                 <input
                   className="chat-input"
-                  placeholder={`Message #${activeChannel.name}`}
+                  placeholder={`${t.chat.messagePlaceholder} #${activeChannel.name}`}
                   value={inputValue}
                   onChange={e => handleInputChange(e.target.value)}
                   onBlur={stopTyping}
@@ -748,11 +843,11 @@ export default function ChatPage() {
           </>
         ) : (
           <div className="empty-state">
-            <h2>{activeServer ? 'Sélectionnez un channel' : 'Bienvenue !'}</h2>
+            <h2>{activeServer ? t.chat.selectChannel : t.chat.welcome}</h2>
             <p>
               {activeServer
-                ? 'Cliquez sur un salon pour chatter'
-                : 'Créez ou rejoignez un serveur depuis la barre latérale'}
+                ? t.chat.clickToChat
+                : t.chat.createOrJoin}
             </p>
           </div>
         )}
@@ -762,13 +857,13 @@ export default function ChatPage() {
       {activeServer && (
         <aside className="members-sidebar">
           <div className="members-sidebar-header">
-            Membres — {allMembers.length}
+            {t.chat.members} — {allMembers.length}
           </div>
           <div className="members-list">
             {/* En ligne */}
             {onlineList.length > 0 && (
               <>
-                <div className="members-group-label">En ligne — {onlineList.length}</div>
+                <div className="members-group-label">{t.chat.onlineGroup} — {onlineList.length}</div>
                 {onlineList.map(u => {
                   const member = allMembers.find(m => m.userId === u.userId);
                   const isMe = u.userId === currentUser.id;
@@ -782,7 +877,6 @@ export default function ChatPage() {
                         {u.username}
                         {member && roleBadge(member.role)}
                       </span>
-                      {/* Gestion membres (OWNER ou ADMIN selon hiérarchie, pas sur soi-même) */}
                       {!isMe && member && (isOwner || canKick(activeServer!.userRole, member.role)) && (
                         <button
                           className="member-actions-btn"
@@ -810,7 +904,7 @@ export default function ChatPage() {
               return (
                 <div key={role}>
                   <div className="members-group-label">
-                    {role === 'OWNER' ? 'Owner' : role === 'ADMIN' ? 'Admins' : 'Membres'} — hors ligne
+                    {role === 'OWNER' ? 'Owner' : role === 'ADMIN' ? 'Admins' : t.chat.members} {t.chat.offlineSuffix}
                   </div>
                   {offlineMembers.map(m => (
                     <div key={m.id} className="member-item" style={{ opacity: .4 }}>
@@ -833,91 +927,91 @@ export default function ChatPage() {
       {/* ── Modales ───────────────────────────────────────────────────────── */}
 
       {modal === 'createServer' && (
-        <Modal title="Créer un serveur" onClose={() => setModal(null)}>
-          <p>Donnez un nom à votre serveur</p>
-          <label>Nom du serveur</label>
+        <Modal title={t.modal.createServer.title} onClose={() => setModal(null)}>
+          <p>{t.modal.createServer.desc}</p>
+          <label>{t.modal.createServer.label}</label>
           <input value={modalInput} onChange={e => setModalInput(e.target.value)}
-            placeholder="Mon serveur" onKeyDown={e => e.key === 'Enter' && handleCreateServer()} autoFocus />
+            placeholder={t.modal.createServer.placeholder} onKeyDown={e => e.key === 'Enter' && handleCreateServer()} autoFocus />
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-confirm" onClick={handleCreateServer}>Créer</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-confirm" onClick={handleCreateServer}>{t.modal.create}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'joinServer' && (
-        <Modal title="Rejoindre un serveur" onClose={() => setModal(null)}>
-          <p>Entrez le code d'invitation</p>
-          <label>Code d'invitation</label>
+        <Modal title={t.modal.joinServer.title} onClose={() => setModal(null)}>
+          <p>{t.modal.joinServer.desc}</p>
+          <label>{t.modal.joinServer.label}</label>
           <input value={modalInput} onChange={e => setModalInput(e.target.value)}
             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             onKeyDown={e => e.key === 'Enter' && handleJoinServer()} autoFocus />
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-confirm" onClick={handleJoinServer}>Rejoindre</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-confirm" onClick={handleJoinServer}>{t.modal.join}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'createChannel' && (
-        <Modal title="Créer un channel" onClose={() => setModal(null)}>
-          <p>Nouveau salon dans <strong>{activeServer?.name}</strong></p>
-          <label>Nom</label>
+        <Modal title={t.modal.createChannel.title} onClose={() => setModal(null)}>
+          <p>{t.modal.createChannel.desc} <strong>{activeServer?.name}</strong></p>
+          <label>{t.modal.createChannel.label}</label>
           <input value={modalInput} onChange={e => setModalInput(e.target.value)}
-            placeholder="nouveau-salon" onKeyDown={e => e.key === 'Enter' && handleCreateChannel()} autoFocus />
+            placeholder={t.modal.createChannel.placeholder} onKeyDown={e => e.key === 'Enter' && handleCreateChannel()} autoFocus />
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-confirm" onClick={handleCreateChannel}>Créer</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-confirm" onClick={handleCreateChannel}>{t.modal.create}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'invite' && activeServer && (
-        <Modal title="Inviter des amis" onClose={() => setModal(null)}>
-          <p>Code d'invitation pour <strong>{activeServer.name}</strong></p>
+        <Modal title={t.modal.invite.title} onClose={() => setModal(null)}>
+          <p>{t.modal.invite.desc} <strong>{activeServer.name}</strong></p>
           <div
             className="invite-code-box"
             onClick={() => navigator.clipboard.writeText(activeServer.inviteCode)}
-            title="Cliquer pour copier"
+            title={t.modal.invite.clickToCopy}
             style={{ cursor: 'pointer' }}
           >
             {activeServer.inviteCode}
           </div>
-          <div style={{ fontSize: 12, color: '#72767d', marginBottom: 12 }}>Cliquez pour copier</div>
+          <div style={{ fontSize: 12, color: '#72767d', marginBottom: 12 }}>{t.modal.invite.clickToCopy}</div>
           <div className="modal-actions">
-            <button className="btn-confirm" onClick={() => setModal(null)}>Fermer</button>
+            <button className="btn-confirm" onClick={() => setModal(null)}>{t.modal.close}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'leaveServer' && (
-        <Modal title="Quitter le serveur" onClose={() => setModal(null)}>
-          <p>Quitter <strong>{activeServer?.name}</strong> ? Vous aurez besoin d'un code d'invitation pour revenir.</p>
+        <Modal title={t.modal.leaveServer.title} onClose={() => setModal(null)}>
+          <p>{t.chat.leaveServer} <strong>{activeServer?.name}</strong> ? {t.modal.leaveServer.warning}</p>
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-danger" onClick={handleLeaveServer}>Quitter</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-danger" onClick={handleLeaveServer}>{t.modal.leave}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'deleteServer' && (
-        <Modal title="Supprimer le serveur" onClose={() => setModal(null)}>
-          <p>Supprimer <strong>{activeServer?.name}</strong> ? Cette action est irréversible.</p>
+        <Modal title={t.modal.deleteServer.title} onClose={() => setModal(null)}>
+          <p>{t.modal.delete} <strong>{activeServer?.name}</strong> ? {t.modal.deleteServer.warning}</p>
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-danger" onClick={handleDeleteServer}>Supprimer</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-danger" onClick={handleDeleteServer}>{t.modal.delete}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'manageMembers' && activeServer && (
-        <Modal title="Gérer les membres" onClose={() => setModal(null)}>
-          <p>Gérez les rôles dans <strong>{activeServer.name}</strong></p>
+        <Modal title={t.modal.manageMembers.title} onClose={() => setModal(null)}>
+          <p>{t.modal.manageMembers.desc} <strong>{activeServer.name}</strong></p>
           <div style={{ maxHeight: 320, overflowY: 'auto', margin: '8px 0 16px' }}>
             {allMembers.map(m => {
               const isMe = m.userId === currentUser.id;
@@ -933,7 +1027,7 @@ export default function ChatPage() {
                   </div>
                   <span style={{ flex: 1, fontSize: 14, color: '#dcddde' }}>
                     {m.user.username}
-                    {isMe && <span style={{ color: '#72767d', fontSize: 12 }}> (vous)</span>}
+                    {isMe && <span style={{ color: '#72767d', fontSize: 12 }}> {t.chat.you}</span>}
                     {roleBadge(m.role)}
                   </span>
                   {!isMe && (
@@ -992,7 +1086,7 @@ export default function ChatPage() {
             })}
           </div>
           <div className="modal-actions">
-            <button className="btn-confirm" onClick={() => setModal(null)}>Fermer</button>
+            <button className="btn-confirm" onClick={() => setModal(null)}>{t.modal.close}</button>
           </div>
         </Modal>
       )}
@@ -1014,12 +1108,12 @@ export default function ChatPage() {
         >
           {isOwner && memberMenu.member.role !== 'ADMIN' && (
             <button onClick={() => handleChangeRole(memberMenu.member, 'ADMIN')}>
-              Nommer Administrateur
+              {t.memberMenu.makeAdmin}
             </button>
           )}
           {isOwner && memberMenu.member.role !== 'MEMBER' && (
             <button onClick={() => handleChangeRole(memberMenu.member, 'MEMBER')}>
-              Retirer Administrateur
+              {t.memberMenu.removeAdmin}
             </button>
           )}
           {isOwner && (
@@ -1033,7 +1127,7 @@ export default function ChatPage() {
                   setModal('confirmTransfer');
                 }}
               >
-                Transférer le serveur
+                {t.memberMenu.transferServer}
               </button>
             </>
           )}
@@ -1048,7 +1142,7 @@ export default function ChatPage() {
                   setModal('confirmKick');
                 }}
               >
-                🚫 Expulser du serveur
+                🚫 {t.memberMenu.kickFromServer}
               </button>
               <button
                 className="danger"
@@ -1059,7 +1153,7 @@ export default function ChatPage() {
                   setModal('confirmBan');
                 }}
               >
-                🔨 Bannir
+                🔨 {t.memberMenu.ban}
               </button>
             </>
           )}
@@ -1067,66 +1161,68 @@ export default function ChatPage() {
       )}
 
       {modal === 'confirmTransfer' && transferTarget && (
-        <Modal title="Transférer l'ownership" onClose={() => setModal(null)}>
+        <Modal title={t.modal.confirmTransfer.title} onClose={() => setModal(null)}>
           <p>
-            Transférer le serveur <strong>{activeServer?.name}</strong> à{' '}
+            {t.modal.confirmTransfer.transferTo} <strong>{activeServer?.name}</strong> {t.modal.confirmTransfer.to}{' '}
             <strong>{transferTarget.user.username}</strong> ?<br />
-            Vous deviendrez Administrateur.
+            {t.modal.confirmTransfer.becomeAdmin}
           </p>
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-danger" onClick={handleTransferOwnership}>Confirmer</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-danger" onClick={handleTransferOwnership}>{t.modal.confirm}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'confirmKick' && kickTarget && (
-        <Modal title="Expulser un membre" onClose={() => setModal(null)}>
+        <Modal title={t.modal.confirmKick.title} onClose={() => setModal(null)}>
           <p>
-            Expulser <strong>{kickTarget.user.username}</strong> du serveur{' '}
+            {t.modal.confirmKick.kick} <strong>{kickTarget.user.username}</strong> {t.modal.confirmKick.from}{' '}
             <strong>{activeServer?.name}</strong> ?<br />
-            Il pourra revenir avec un code d'invitation.
+            {t.modal.confirmKick.canReturn}
           </p>
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
-            <button className="btn-danger" onClick={handleKickMember}>Expulser</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
+            <button className="btn-danger" onClick={handleKickMember}>{t.modal.kick}</button>
           </div>
         </Modal>
       )}
 
       {modal === 'confirmBan' && banTarget && (
-        <Modal title="Bannir un membre" onClose={() => setModal(null)}>
+        <Modal title={t.modal.confirmBan.title} onClose={() => setModal(null)}>
           <p>
-            Bannir <strong>{banTarget.user.username}</strong> du serveur{' '}
+            {t.modal.confirmBan.ban} <strong>{banTarget.user.username}</strong> {t.modal.confirmBan.from}{' '}
             <strong>{activeServer?.name}</strong> ?
           </p>
-          <label>Durée (en minutes) — laisser vide pour un ban définitif</label>
+          <label>{t.modal.confirmBan.durationLabel}</label>
           <input
             type="number"
             min="1"
             value={banDuration}
             onChange={e => setBanDuration(e.target.value)}
-            placeholder="Ex : 60 (1h), 1440 (1j) — vide = définitif"
+            placeholder={t.modal.confirmBan.durationPlaceholder}
             autoFocus
           />
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-ghost" onClick={() => setModal(null)}>Annuler</button>
+            <button className="btn-ghost" onClick={() => setModal(null)}>{t.modal.cancel}</button>
             <button className="btn-danger" onClick={handleBanMember}>
-              {banDuration.trim() !== '' ? `Bannir (${banDuration} min)` : 'Bannir définitivement'}
+              {banDuration.trim() !== ''
+                ? t.modal.confirmBan.banWithDuration.replace('{duration}', banDuration)
+                : t.modal.confirmBan.banPermanent}
             </button>
           </div>
         </Modal>
       )}
 
       {modal === 'manageBans' && activeServer && (
-        <Modal title="Bans du serveur" onClose={() => setModal(null)}>
-          <p>Utilisateurs bannis de <strong>{activeServer.name}</strong></p>
+        <Modal title={t.modal.manageBans.title} onClose={() => setModal(null)}>
+          <p>{t.modal.manageBans.desc} <strong>{activeServer.name}</strong></p>
           <div style={{ maxHeight: 320, overflowY: 'auto', margin: '8px 0 16px' }}>
             {bans.length === 0 && (
-              <p style={{ color: '#72767d', fontSize: 13 }}>Aucun ban actif.</p>
+              <p style={{ color: '#72767d', fontSize: 13 }}>{t.modal.manageBans.noBans}</p>
             )}
             {bans.map(b => {
               const isPermanent = !b.expiresAt;
@@ -1141,12 +1237,12 @@ export default function ChatPage() {
                       {b.user.username}
                     </div>
                     <div style={{ fontSize: 12, color: '#72767d' }}>
-                      Banni par {b.banner.username} ·{' '}
+                      {t.modal.manageBans.bannedBy} {b.banner.username} ·{' '}
                       {isPermanent
-                        ? <span style={{ color: '#f04747' }}>Définitif</span>
+                        ? <span style={{ color: '#f04747' }}>{t.modal.manageBans.permanent}</span>
                         : isExpired
-                          ? <span style={{ color: '#43b581' }}>Expiré</span>
-                          : <span>Jusqu'au {new Date(b.expiresAt!).toLocaleString('fr-FR')}</span>
+                          ? <span style={{ color: '#43b581' }}>{t.modal.manageBans.expired}</span>
+                          : <span>{t.modal.manageBans.until} {new Date(b.expiresAt!).toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB')}</span>
                       }
                     </div>
                   </div>
@@ -1154,14 +1250,14 @@ export default function ChatPage() {
                     className="btn-confirm"
                     style={{ fontSize: 12, padding: '4px 8px' }}
                     onClick={() => handleUnban(b.userId)}
-                  >Débannir</button>
+                  >{t.modal.unban}</button>
                 </div>
               );
             })}
           </div>
           {modalError && <div className="auth-error">{modalError}</div>}
           <div className="modal-actions">
-            <button className="btn-confirm" onClick={() => setModal(null)}>Fermer</button>
+            <button className="btn-confirm" onClick={() => setModal(null)}>{t.modal.close}</button>
           </div>
         </Modal>
       )}

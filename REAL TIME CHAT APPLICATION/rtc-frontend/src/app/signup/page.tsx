@@ -3,9 +3,12 @@ import { useState, FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { signup } from '@/lib/api';
+import { useLanguage } from '@/contexts/LanguageContext';
+import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 export default function SignupPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -31,41 +34,44 @@ export default function SignupPage() {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <h1>Créer un compte</h1>
-        <p>Rejoignez la communauté dès maintenant</p>
+        <div className="auth-lang-switcher">
+          <LanguageSwitcher />
+        </div>
+        <h1>{t.signup.title}</h1>
+        <p>{t.signup.subtitle}</p>
         <form onSubmit={handleSubmit}>
-          <label>Email</label>
+          <label>{t.signup.email}</label>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Votre email"
+            placeholder={t.signup.emailPlaceholder}
             required
           />
-          <label>Nom d'utilisateur</label>
+          <label>{t.signup.username}</label>
           <input
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="Votre pseudo"
+            placeholder={t.signup.usernamePlaceholder}
             required
           />
-          <label>Mot de passe</label>
+          <label>{t.signup.password}</label>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Choisissez un mot de passe"
+            placeholder={t.signup.passwordPlaceholder}
             required
           />
           {error && <div className="auth-error">{error}</div>}
           <button className="btn-primary" type="submit" disabled={loading}>
-            {loading ? 'Inscription...' : "S'inscrire"}
+            {loading ? t.signup.loading : t.signup.submit}
           </button>
         </form>
         <div className="auth-footer">
-          Déjà un compte ?{' '}
-          <Link href="/login">Se connecter</Link>
+          {t.signup.hasAccount}{' '}
+          <Link href="/login">{t.signup.loginLink}</Link>
         </div>
       </div>
     </div>

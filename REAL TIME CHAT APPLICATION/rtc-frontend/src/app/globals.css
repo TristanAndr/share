@@ -128,6 +128,43 @@ input, textarea {
   text-align: center;
 }
 
+/* ─── LANGUAGE SWITCHER ─────────────────────────────────────────────────────── */
+
+.lang-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lang-btn {
+  background: none;
+  color: #72767d;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: color .15s;
+  letter-spacing: .5px;
+}
+
+.lang-btn:hover { color: #dcddde; }
+
+.lang-btn.active {
+  color: #7289da;
+}
+
+.lang-sep {
+  color: #4f545c;
+  font-size: 11px;
+  user-select: none;
+}
+
+.auth-lang-switcher {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
 /* ─── CHAT LAYOUT ───────────────────────────────────────────────────────────── */
 
 .chat-app {
@@ -488,6 +525,81 @@ input, textarea {
 }
 
 .btn-send:hover { color: #7289da; }
+
+.btn-gif {
+  background: transparent;
+  color: #72767d;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #72767d;
+  transition: color .1s, border-color .1s;
+  flex-shrink: 0;
+  letter-spacing: .5px;
+}
+
+.btn-gif:hover { color: #7289da; border-color: #7289da; }
+
+/* GIF Picker */
+.gif-picker {
+  background: #2f3136;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid #40444b;
+}
+
+.gif-search-input {
+  width: 100%;
+  background: #40444b;
+  border: none;
+  border-radius: 6px;
+  color: #dcddde;
+  font-size: 14px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  outline: none;
+}
+
+.gif-search-input::placeholder { color: #72767d; }
+.gif-search-input:focus { box-shadow: 0 0 0 2px #7289da; }
+
+.gif-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.gif-item {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity .1s, transform .1s;
+}
+
+.gif-item:hover { opacity: .85; transform: scale(1.02); }
+
+.gif-loading, .gif-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: #72767d;
+  font-size: 13px;
+  padding: 20px 0;
+}
+
+/* GIF dans les messages */
+.message-gif {
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 6px;
+  display: block;
+  margin-top: 4px;
+}
 
 /* Empty states */
 .empty-state {
