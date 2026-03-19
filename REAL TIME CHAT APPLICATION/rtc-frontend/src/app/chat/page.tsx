@@ -9,7 +9,8 @@ import {
   createChannel, deleteChannel,
   getMessages, editMessage, deleteMessage,
   getMembers, updateMemberRole, transferOwnership, kickMember,
-  banMember, unbanMember, getBans, searchGifs
+  banMember, unbanMember, getBans, searchGifs,
+  getUsers, getDMMessages, editDMMessage, deleteDMMessage
 } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
@@ -40,6 +41,13 @@ interface Message {
 interface OnlineUser { userId: number; username: string; }
 
 interface GifResult { id: string; url: string; preview: string; title: string; }
+
+interface DirectMessage {
+  id: number; content: string; isEdited: boolean;
+  createdAt: string; senderId: number; receiverId: number;
+  sender: { id: number; username: string };
+  receiver: { id: number; username: string };
+}
 
 interface Ban {
   id: number;
@@ -113,6 +121,15 @@ export default function ChatPage() {
   const [gifResults, setGifResults] = useState<GifResult[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
   const gifSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // DM
+  const [viewMode, setViewMode] = useState<'server' | 'dm'>('server');
+  const [dmUsersList, setDmUsersList] = useState<User[]>([]);
+  const [activeDMUser, setActiveDMUser] = useState<User | null>(null);
+  const [dmMessages, setDmMessages] = useState<DirectMessage[]>([]);
+  const [dmInputValue, setDmInputValue] = useState('');
+  const [dmEditingId, setDmEditingId] = useState<number | null>(null);
+  const [dmEditValue, setDmEditValue] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -247,6 +264,24 @@ export default function ChatPage() {
       }
     });
 
+    socket.on('receive_dm', (dm: DirectMessage) => {
+      if (
+        activeDMUser &&
+        ((dm.senderId === activeDMUser.id && dm.receiverId === currentUser.id) ||
+          (dm.senderId === currentUser.id && dm.receiverId === activeDMUser.id))
+      ) {
+        setDmMessages(prev => [...prev, dm]);
+      }
+    });
+
+    socket.on('dm_updated', (dm: DirectMessage) => {
+      setDmMessages(prev => prev.map(m => m.id === dm.id ? dm : m));
+    });
+
+    socket.on('dm_deleted', ({ messageId }: { messageId: number }) => {
+      setDmMessages(prev => prev.filter(m => m.id !== messageId));
+    });
+
     socket.on('ownership_transferred', ({ serverId, newOwnerId, oldOwnerId }: {
       serverId: number; newOwnerId: number; oldOwnerId: number;
     }) => {
@@ -281,8 +316,20 @@ export default function ChatPage() {
       socket.off('ownership_transferred');
       socket.off('user_kicked');
       socket.off('user_banned');
+      socket.off('receive_dm');
+      socket.off('dm_updated');
+      socket.off('dm_deleted');
     };
-  }, [currentUser, activeChannel, activeServer?.id]);
+  }, [currentUser, activeChannel, activeServer?.id, activeDMUser]);
+
+  // ─── DM : rejoindre la room et charger les messages ───────────────────────
+
+  useEffect(() => {
+    if (!activeDMUser || !currentUser) return;
+    const socket = getSocket();
+    socket.emit('join_dm', { token: token.current, otherUserId: activeDMUser.id });
+    getDMMessages(activeDMUser.id).then(setDmMessages).catch(console.error);
+  }, [activeDMUser?.id]);
 
   // ─── Channel change : messages + socket rooms ──────────────────────────────
 
@@ -370,6 +417,9 @@ export default function ChatPage() {
   // ─── Sélection serveur ────────────────────────────────────────────────────
 
   function selectServer(srv: Server) {
+    setViewMode('server');
+    setActiveDMUser(null);
+    setDmMessages([]);
     setActiveServer(srv);
     setShowServerMenu(false);
     setMessages([]);
@@ -462,6 +512,49 @@ export default function ChatPage() {
 
   async function handleDeleteMessage(id: number) {
     try { await deleteMessage(id); } catch (e) { console.error(e); }
+  }
+
+  // ─── DM helpers ───────────────────────────────────────────────────────────
+
+  async function openDMMode() {
+    setViewMode('dm');
+    setActiveServer(null);
+    setActiveChannel(null);
+    setMessages([]);
+    try {
+      const data = await getUsers();
+      setDmUsersList(data);
+    } catch (e) { console.error(e); }
+  }
+
+  function selectDMUser(user: User) {
+    setActiveDMUser(user);
+    setDmMessages([]);
+    setDmEditingId(null);
+  }
+
+  function sendDM(e: FormEvent) {
+    e.preventDefault();
+    if (!dmInputValue.trim() || !activeDMUser) return;
+    getSocket().emit('send_dm', {
+      token: token.current,
+      content: dmInputValue.trim(),
+      receiverId: activeDMUser.id
+    });
+    setDmInputValue('');
+  }
+
+  async function submitDMEdit(id: number) {
+    if (!dmEditValue.trim()) return;
+    try {
+      const updated = await editDMMessage(id, dmEditValue.trim());
+      setDmMessages(prev => prev.map(m => m.id === updated.id ? updated : m));
+    } catch (e) { console.error(e); }
+    setDmEditingId(null);
+  }
+
+  async function handleDeleteDM(id: number) {
+    try { await deleteDMMessage(id); } catch (e) { console.error(e); }
   }
 
   // ─── Modales helpers ──────────────────────────────────────────────────────
@@ -604,10 +697,17 @@ export default function ChatPage() {
 
       {/* ── Col 1 : icônes serveurs ─────────────────────────────────────── */}
       <nav className="server-sidebar">
+        <button
+          className={`server-icon${viewMode === 'dm' ? ' active' : ''}`}
+          onClick={openDMMode}
+          title={t.dm.title}
+          style={{ fontSize: 16 }}
+        >💬</button>
+        <div className="server-divider" />
         {servers.map(srv => (
           <button
             key={srv.id}
-            className={`server-icon${activeServer?.id === srv.id ? ' active' : ''}`}
+            className={`server-icon${viewMode === 'server' && activeServer?.id === srv.id ? ' active' : ''}`}
             onClick={() => selectServer(srv)}
             title={srv.name}
           >
@@ -619,9 +719,45 @@ export default function ChatPage() {
         <button className="server-icon" onClick={() => openModal('joinServer')} title={t.chat.joinServer} style={{ fontSize: 12 }}>🔗</button>
       </nav>
 
-      {/* ── Col 2 : channels ────────────────────────────────────────────── */}
+      {/* ── Col 2 : channels / DM list ──────────────────────────────────── */}
       <aside className="channel-sidebar">
-        {activeServer ? (
+        {viewMode === 'dm' ? (
+          <>
+            <div className="channel-sidebar-header">
+              <span className="server-name">{t.dm.title}</span>
+            </div>
+            <div className="channel-sidebar-body">
+              <div className="channel-section-label">
+                <span>{t.dm.allUsers}</span>
+              </div>
+              {dmUsersList.map(u => (
+                <div
+                  key={u.id}
+                  className={`channel-item${activeDMUser?.id === u.id ? ' active' : ''}`}
+                  onClick={() => selectDMUser(u)}
+                >
+                  <div className="member-avatar" style={{ width: 28, height: 28, borderRadius: '50%', background: '#7289da', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 11, flexShrink: 0 }}>
+                    {initials(u.username)}
+                  </div>
+                  <span className="channel-item-name">{u.username}</span>
+                </div>
+              ))}
+              {dmUsersList.length === 0 && (
+                <div style={{ padding: '8px 16px', fontSize: 13, color: '#72767d' }}>Aucun autre utilisateur</div>
+              )}
+            </div>
+            <div className="channel-sidebar-footer">
+              <div className="user-avatar">{initials(currentUser.username)}</div>
+              <div className="user-info">
+                <div className="username">{currentUser.username}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <LanguageSwitcher />
+                <button className="btn-logout" onClick={logout} title={t.chat.logout}>⏻</button>
+              </div>
+            </div>
+          </>
+        ) : activeServer ? (
           <>
             {/* En-tête serveur */}
             <div
@@ -700,23 +836,102 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* Pied utilisateur */}
-        <div className="channel-sidebar-footer">
-          <div className="user-avatar">{initials(currentUser.username)}</div>
-          <div className="user-info">
-            <div className="username">{currentUser.username}</div>
-            <div className="tag">{activeServer ? roleBadge(activeServer.userRole) ?? t.chat.member : t.chat.online}</div>
+        {/* Pied utilisateur (mode serveur uniquement) */}
+        {viewMode === 'server' && (
+          <div className="channel-sidebar-footer">
+            <div className="user-avatar">{initials(currentUser.username)}</div>
+            <div className="user-info">
+              <div className="username">{currentUser.username}</div>
+              <div className="tag">{activeServer ? roleBadge(activeServer.userRole) ?? t.chat.member : t.chat.online}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <LanguageSwitcher />
+              <button className="btn-logout" onClick={logout} title={t.chat.logout}>⏻</button>
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <LanguageSwitcher />
-            <button className="btn-logout" onClick={logout} title={t.chat.logout}>⏻</button>
-          </div>
-        </div>
+        )}
       </aside>
 
       {/* ── Col 3 : chat ────────────────────────────────────────────────── */}
       <main className="chat-main">
-        {activeChannel ? (
+        {viewMode === 'dm' && activeDMUser ? (
+          <>
+            <div className="chat-header">
+              <span style={{ marginRight: 8 }}>💬</span>
+              <span>{activeDMUser.username}</span>
+            </div>
+            <div className="chat-messages">
+              {dmMessages.length === 0 && (
+                <div className="empty-state" style={{ flex: 1 }}>
+                  <p>{t.dm.noMessages}</p>
+                </div>
+              )}
+              {dmMessages.map(msg => {
+                const isMe = msg.senderId === currentUser.id;
+                return (
+                  <div key={msg.id} className="message-group">
+                    <div className="message-avatar">{initials(msg.sender.username)}</div>
+                    <div className="message-body">
+                      <div className="message-header">
+                        <span className="message-author">{msg.sender.username}</span>
+                        <span className="message-time">{formatTime(msg.createdAt)}</span>
+                      </div>
+                      {dmEditingId === msg.id ? (
+                        <>
+                          <input
+                            className="edit-input"
+                            value={dmEditValue}
+                            onChange={e => setDmEditValue(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') submitDMEdit(msg.id);
+                              if (e.key === 'Escape') setDmEditingId(null);
+                            }}
+                            autoFocus
+                          />
+                          <div className="edit-hint">{t.chat.editHint}</div>
+                        </>
+                      ) : msg.content.startsWith('[gif]') ? (
+                        <div className="message-content">
+                          <img className="message-gif" src={msg.content.slice(5)} alt="GIF" loading="lazy" />
+                        </div>
+                      ) : (
+                        <div className={`message-content${msg.isEdited ? ' edited' : ''}`}>
+                          {msg.content}
+                        </div>
+                      )}
+                    </div>
+                    <div className="message-actions">
+                      {isMe && dmEditingId !== msg.id && (
+                        <button className="icon-btn" title={t.chat.editMessage} onClick={() => { setDmEditingId(msg.id); setDmEditValue(msg.content); }}>✏️</button>
+                      )}
+                      {isMe && (
+                        <button className="icon-btn danger" title={t.chat.deleteMessage} onClick={() => handleDeleteDM(msg.id)}>🗑️</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+            <div className="chat-input-area">
+              <form className="chat-input-wrapper" onSubmit={sendDM}>
+                <input
+                  className="chat-input"
+                  placeholder={`${t.dm.placeholder} ${activeDMUser.username}`}
+                  value={dmInputValue}
+                  onChange={e => setDmInputValue(e.target.value)}
+                  autoComplete="off"
+                />
+                <button className="btn-send" type="submit">➤</button>
+              </form>
+            </div>
+          </>
+        ) : viewMode === 'dm' ? (
+          <div className="empty-state">
+            <h2>{t.dm.title}</h2>
+            <p>{t.dm.sendMessage}</p>
+          </div>
+        ) : activeChannel ? (
           <>
             <div className="chat-header">
               <span className="hash">#</span>

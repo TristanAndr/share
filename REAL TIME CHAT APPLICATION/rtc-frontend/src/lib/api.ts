@@ -72,3 +72,13 @@ export const editMessage = (messageId: number, content: string) =>
   request(`/messages/${messageId}`, { method: 'PUT', body: JSON.stringify({ content }) });
 export const deleteMessage = (messageId: number) =>
   request(`/messages/${messageId}`, { method: 'DELETE' });
+
+// Users
+export const getUsers = () => request('/users');
+
+// Direct Messages
+export const getDMMessages = (userId: number) => request(`/dm/${userId}/messages`);
+export const editDMMessage = (messageId: number, content: string) =>
+  request(`/dm/messages/${messageId}`, { method: 'PUT', body: JSON.stringify({ content }) });
+export const deleteDMMessage = (messageId: number) =>
+  request(`/dm/messages/${messageId}`, { method: 'DELETE' });

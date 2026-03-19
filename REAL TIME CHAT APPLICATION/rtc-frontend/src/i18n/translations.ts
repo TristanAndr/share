@@ -1,6 +1,14 @@
 export type Locale = 'fr' | 'en';
 
 export interface Translations {
+  dm: {
+    title: string;
+    newDM: string;
+    placeholder: string;
+    noMessages: string;
+    allUsers: string;
+    sendMessage: string;
+  };
   login: {
     title: string; subtitle: string; email: string; emailPlaceholder: string;
     password: string; passwordPlaceholder: string; submit: string; loading: string;
@@ -16,7 +24,7 @@ export interface Translations {
     manageMembers: string; manageBans: string; leaveServer: string; deleteServer: string;
     channels: string; noChannel: string; joinOrCreate: string; member: string; online: string;
     logout: string; deleteChannel: string; create: string;
-    firstMessage: string; editHint: string; editMessage: string; deleteMessage: string;
+    firstMessage: string; editHint: string; editMessage: string; deleteMessage: string; edited: string;
     selectChannel: string; welcome: string; clickToChat: string; createOrJoin: string;
     messagePlaceholder: string; members: string; onlineGroup: string; offlineSuffix: string;
     you: string; isTyping: string; areTyping: string; manyTyping: string;
@@ -61,6 +69,14 @@ export interface Translations {
 
 const translations: Record<Locale, Translations> = {
   fr: {
+    dm: {
+      title: 'Messages privés',
+      newDM: 'Nouveau message',
+      placeholder: 'Envoyer un message à',
+      noMessages: 'Aucun message pour le moment. Dites bonjour !',
+      allUsers: 'Utilisateurs',
+      sendMessage: 'Envoyer un message privé',
+    },
     // Auth - Login
     login: {
       title: 'Bon retour !',
@@ -112,6 +128,7 @@ const translations: Record<Locale, Translations> = {
       editHint: 'Entrée pour valider · Échap pour annuler',
       editMessage: 'Modifier',
       deleteMessage: 'Supprimer',
+      edited: 'modifié',
       selectChannel: 'Sélectionnez un channel',
       welcome: 'Bienvenue !',
       clickToChat: 'Cliquez sur un salon pour chatter',
@@ -227,6 +244,14 @@ const translations: Record<Locale, Translations> = {
   },
 
   en: {
+    dm: {
+      title: 'Direct Messages',
+      newDM: 'New message',
+      placeholder: 'Message',
+      noMessages: 'No messages yet. Say hello!',
+      allUsers: 'Users',
+      sendMessage: 'Send a direct message',
+    },
     // Auth - Login
     login: {
       title: 'Welcome back!',
@@ -278,6 +303,7 @@ const translations: Record<Locale, Translations> = {
       editHint: 'Enter to save · Escape to cancel',
       editMessage: 'Edit',
       deleteMessage: 'Delete',
+      edited: 'edited',
       selectChannel: 'Select a channel',
       welcome: 'Welcome!',
       clickToChat: 'Click on a channel to chat',

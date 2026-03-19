@@ -9,14 +9,16 @@ datasource db {
 }
 
 model User {
-  id         Int       @id @default(autoincrement())
-  email      String    @unique
-  username   String
-  password   String
-  members    Member[]
-  messages   Message[]
-  bans       Ban[]     @relation("BannedUser")
-  bannedOnes Ban[]     @relation("BannedBy")
+  id          Int             @id @default(autoincrement())
+  email       String          @unique
+  username    String
+  password    String
+  members     Member[]
+  messages    Message[]
+  bans        Ban[]           @relation("BannedUser")
+  bannedOnes  Ban[]           @relation("BannedBy")
+  sentDMs     DirectMessage[] @relation("SentDMs")
+  receivedDMs DirectMessage[] @relation("ReceivedDMs")
 }
 
 model Server {
@@ -55,6 +57,17 @@ model Message {
   channelId Int
   user      User     @relation(fields: [userId], references: [id])
   channel   Channel  @relation(fields: [channelId], references: [id])
+}
+
+model DirectMessage {
+  id         Int      @id @default(autoincrement())
+  content    String
+  isEdited   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  senderId   Int
+  receiverId Int
+  sender     User     @relation(name: "SentDMs", fields: [senderId], references: [id])
+  receiver   User     @relation(name: "ReceivedDMs", fields: [receiverId], references: [id])
 }
 
 model Ban {

@@ -39,6 +39,11 @@ function getUniqueOnlineUsers(serverId: number) {
   return users;
 }
 
+// ─── DM ROOM HELPER ───────────────────────────────────────────────────────────
+function dmRoom(a: number, b: number) {
+  return `dm:${Math.min(a, b)}-${Math.max(a, b)}`;
+}
+
 // ─── MIDDLEWARES ──────────────────────────────────────────────────────────────
 
 const authMiddleware = async (req: any, res: any, next: any) => {
@@ -528,6 +533,29 @@ io.on('connection', (socket) => {
     } catch (e) { console.error('send_message error:', e); }
   });
 
+  socket.on('join_dm', (data: { token: string; otherUserId: number }) => {
+    try {
+      const decoded: any = jwt.verify(data.token, SECRET);
+      const room = dmRoom(decoded.userId, data.otherUserId);
+      socket.join(room);
+    } catch (e) { console.error('join_dm error:', e); }
+  });
+
+  socket.on('send_dm', async (data: { token: string; content: string; receiverId: number }) => {
+    try {
+      const decoded: any = jwt.verify(data.token, SECRET);
+      const newDM = await (prisma as any).directMessage.create({
+        data: { content: data.content, senderId: decoded.userId, receiverId: data.receiverId },
+        include: {
+          sender: { select: { id: true, username: true } },
+          receiver: { select: { id: true, username: true } }
+        }
+      });
+      const room = dmRoom(decoded.userId, data.receiverId);
+      io.to(room).emit('receive_dm', newDM);
+    } catch (e) { console.error('send_dm error:', e); }
+  });
+
   socket.on('typing_start', (data: { channelId: number; username: string }) => {
     socket.to(String(data.channelId)).emit('user_typing', data);
   });
@@ -553,6 +581,80 @@ io.on('connection', (socket) => {
     socketData.delete(socket.id);
     console.log('User disconnected:', socket.id);
   });
+});
+
+// ─── USERS ────────────────────────────────────────────────────────────────────
+
+app.get('/users', authMiddleware, async (req: any, res: any) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { id: { not: req.user.userId } },
+      select: { id: true, username: true },
+      orderBy: { username: 'asc' }
+    });
+    res.json(users);
+  } catch (e) { res.status(500).json({ error: 'Error fetching users' }); }
+});
+
+// ─── DIRECT MESSAGES ──────────────────────────────────────────────────────────
+
+// Lister les messages entre deux utilisateurs
+app.get('/dm/:userId/messages', authMiddleware, async (req: any, res: any) => {
+  const otherUserId = Number(req.params.userId);
+  const myId = req.user.userId;
+  try {
+    const messages = await (prisma as any).directMessage.findMany({
+      where: {
+        OR: [
+          { senderId: myId, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: myId }
+        ]
+      },
+      include: {
+        sender: { select: { id: true, username: true } },
+        receiver: { select: { id: true, username: true } }
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+    res.json(messages);
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Error fetching DMs' }); }
+});
+
+// Modifier un DM (expéditeur seulement)
+app.put('/dm/messages/:id', authMiddleware, async (req: any, res: any) => {
+  const id = Number(req.params.id);
+  const { content } = req.body;
+  if (!content) return res.status(400).json({ error: 'Content required' });
+  try {
+    const dm = await (prisma as any).directMessage.findUnique({ where: { id } });
+    if (!dm) return res.status(404).json({ error: 'Not found' });
+    if (dm.senderId !== req.user.userId) return res.status(403).json({ error: 'Forbidden' });
+    const updated = await (prisma as any).directMessage.update({
+      where: { id },
+      data: { content, isEdited: true },
+      include: {
+        sender: { select: { id: true, username: true } },
+        receiver: { select: { id: true, username: true } }
+      }
+    });
+    const roomId = dmRoom(dm.senderId, dm.receiverId);
+    io.to(roomId).emit('dm_updated', updated);
+    res.json(updated);
+  } catch (e) { res.status(500).json({ error: 'Error updating DM' }); }
+});
+
+// Supprimer un DM (expéditeur seulement)
+app.delete('/dm/messages/:id', authMiddleware, async (req: any, res: any) => {
+  const id = Number(req.params.id);
+  try {
+    const dm = await (prisma as any).directMessage.findUnique({ where: { id } });
+    if (!dm) return res.status(404).json({ error: 'Not found' });
+    if (dm.senderId !== req.user.userId) return res.status(403).json({ error: 'Forbidden' });
+    await (prisma as any).directMessage.delete({ where: { id } });
+    const roomId = dmRoom(dm.senderId, dm.receiverId);
+    io.to(roomId).emit('dm_deleted', { messageId: id, senderId: dm.senderId, receiverId: dm.receiverId });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: 'Error deleting DM' }); }
 });
 
 // ─── GIF SEARCH ───────────────────────────────────────────────────────────────
