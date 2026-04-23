@@ -1,0 +1,34 @@
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+dist/
+.next/
+out/
+
+# ── Electron desktop ──────────────────────────────────────────────────────────
+release/
+*.AppImage
+*.exe
+*.dmg
+*.deb
+*.rpm
+*.snap
+*.msi
+*.pkg
+
+# ── Database ──────────────────────────────────────────────────────────────────
+prisma/dev.db
+prisma/dev.db-journal
+/generated/prisma
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+tsconfig.tsbuildinfo
+*.js.map
+.DS_Store
+Thumbs.db

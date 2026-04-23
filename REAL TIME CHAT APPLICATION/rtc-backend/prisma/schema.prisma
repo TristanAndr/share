@@ -15,6 +15,7 @@ model User {
   password    String
   members     Member[]
   messages    Message[]
+  reactions   Reaction[]
   bans        Ban[]           @relation("BannedUser")
   bannedOnes  Ban[]           @relation("BannedBy")
   sentDMs     DirectMessage[] @relation("SentDMs")
@@ -48,15 +49,27 @@ model Member {
 }
 
 model Message {
-  id        Int      @id @default(autoincrement())
+  id        Int        @id @default(autoincrement())
   content   String
-  isEdited  Boolean  @default(false)
-  isSystem  Boolean  @default(false)
-  createdAt DateTime @default(now())
+  isEdited  Boolean    @default(false)
+  isSystem  Boolean    @default(false)
+  createdAt DateTime   @default(now())
   userId    Int
   channelId Int
-  user      User     @relation(fields: [userId], references: [id])
-  channel   Channel  @relation(fields: [channelId], references: [id])
+  user      User       @relation(fields: [userId], references: [id])
+  channel   Channel    @relation(fields: [channelId], references: [id])
+  reactions Reaction[]
+}
+
+model Reaction {
+  id        Int     @id @default(autoincrement())
+  emoji     String
+  userId    Int
+  messageId Int
+  user      User    @relation(fields: [userId], references: [id])
+  message   Message @relation(fields: [messageId], references: [id])
+
+  @@unique([userId, messageId, emoji])
 }
 
 model DirectMessage {

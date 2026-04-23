@@ -6,12 +6,14 @@ import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
+import { dmRoom, getUniqueOnlineUsers } from './utils';
+import { authMiddleware, getUserRole } from './middleware';
+import prisma from './db';
 
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const prisma = new PrismaClient();
 
 app.use(cors({ origin: 'http://localhost:3000', credentials: true }));
 app.use(express.json());
@@ -28,35 +30,7 @@ const serverOnlineMap = new Map<number, Map<string, { userId: number; username: 
 // socketId → [{serverId, userId, username}]
 const socketData = new Map<string, { serverId: number; userId: number; username: string }[]>();
 
-function getUniqueOnlineUsers(serverId: number) {
-  const m = serverOnlineMap.get(serverId);
-  if (!m) return [];
-  const seen = new Set<number>();
-  const users: { userId: number; username: string }[] = [];
-  for (const u of m.values()) {
-    if (!seen.has(u.userId)) { seen.add(u.userId); users.push(u); }
-  }
-  return users;
-}
-
-// ─── DM ROOM HELPER ───────────────────────────────────────────────────────────
-function dmRoom(a: number, b: number) {
-  return `dm:${Math.min(a, b)}-${Math.max(a, b)}`;
-}
-
 // ─── MIDDLEWARES ──────────────────────────────────────────────────────────────
-
-const authMiddleware = async (req: any, res: any, next: any) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
-  try { req.user = jwt.verify(token, SECRET); next(); }
-  catch { res.status(401).json({ error: 'Invalid token' }); }
-};
-
-const getUserRole = async (userId: number, serverId: number): Promise<string | null> => {
-  const member = await prisma.member.findFirst({ where: { userId, serverId } });
-  return member?.role ?? null;
-};
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -170,8 +144,10 @@ app.delete('/servers/:id', authMiddleware, async (req: any, res: any) => {
     return res.status(403).json({ error: 'Forbidden' });
   try {
     const channels = await prisma.channel.findMany({ where: { serverId } });
-    for (const ch of channels)
+    for (const ch of channels) {
+      await (prisma as any).reaction.deleteMany({ where: { message: { channelId: ch.id } } });
       await prisma.message.deleteMany({ where: { channelId: ch.id } });
+    }
     await prisma.channel.deleteMany({ where: { serverId } });
     await prisma.member.deleteMany({ where: { serverId } });
     await prisma.server.delete({ where: { id: serverId } });
@@ -421,6 +397,7 @@ app.delete('/channels/:id', authMiddleware, async (req: any, res: any) => {
     const role = await getUserRole(req.user.userId, channel.serverId);
     if (role !== 'OWNER' && role !== 'ADMIN')
       return res.status(403).json({ error: 'Forbidden' });
+    await (prisma as any).reaction.deleteMany({ where: { message: { channelId } } });
     await prisma.message.deleteMany({ where: { channelId } });
     await prisma.channel.delete({ where: { id: channelId } });
     io.to(`server:${channel.serverId}`).emit('channel_deleted', {
@@ -434,9 +411,12 @@ app.delete('/channels/:id', authMiddleware, async (req: any, res: any) => {
 
 app.get('/channels/:id/messages', authMiddleware, async (req: any, res: any) => {
   try {
-    const messages = await prisma.message.findMany({
+    const messages = await (prisma as any).message.findMany({
       where: { channelId: Number(req.params.id) },
-      include: { user: { select: { id: true, username: true } } },
+      include: {
+        user: { select: { id: true, username: true } },
+        reactions: { include: { user: { select: { id: true, username: true } } } }
+      },
       orderBy: { createdAt: 'asc' }
     });
     res.json(messages);
@@ -475,12 +455,46 @@ app.delete('/messages/:id', authMiddleware, async (req: any, res: any) => {
     const role = await getUserRole(req.user.userId, message.channel.serverId);
     if (!isOwn && role !== 'OWNER' && role !== 'ADMIN')
       return res.status(403).json({ error: 'Forbidden' });
+    await (prisma as any).reaction.deleteMany({ where: { messageId } });
     await prisma.message.delete({ where: { id: messageId } });
     io.to(String(message.channelId)).emit('message_deleted', {
       messageId, channelId: message.channelId
     });
     res.json({ success: true });
   } catch { res.status(500).json({ error: 'Error deleting message' }); }
+});
+
+// ─── REACTIONS ────────────────────────────────────────────────────────────────
+
+// Ajouter ou retirer une réaction (toggle)
+app.post('/messages/:id/reactions', authMiddleware, async (req: any, res: any) => {
+  const messageId = Number(req.params.id);
+  const { emoji } = req.body;
+  if (!emoji) return res.status(400).json({ error: 'Emoji required' });
+  try {
+    const message = await prisma.message.findUnique({ where: { id: messageId } });
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+
+    const existing = await (prisma as any).reaction.findUnique({
+      where: { userId_messageId_emoji: { userId: req.user.userId, messageId, emoji } }
+    });
+
+    if (existing) {
+      await (prisma as any).reaction.delete({ where: { id: existing.id } });
+    } else {
+      await (prisma as any).reaction.create({
+        data: { emoji, userId: req.user.userId, messageId }
+      });
+    }
+
+    const reactions = await (prisma as any).reaction.findMany({
+      where: { messageId },
+      include: { user: { select: { id: true, username: true } } }
+    });
+
+    io.to(String(message.channelId)).emit('reaction_updated', { messageId, reactions });
+    res.json({ reactions });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Error updating reaction' }); }
 });
 
 // ─── SOCKET.IO ────────────────────────────────────────────────────────────────
@@ -511,7 +525,7 @@ io.on('connection', (socket) => {
       // Notifier les autres membres du serveur
       socket.to(`server:${serverId}`).emit('user_online', { userId: user.id, username: user.username });
       // Envoyer la liste courante au connecté
-      socket.emit('online_users', { serverId, users: getUniqueOnlineUsers(serverId) });
+      socket.emit('online_users', { serverId, users: getUniqueOnlineUsers(serverOnlineMap, serverId) });
     } catch (e) { console.error('join_server error:', e); }
   });
 

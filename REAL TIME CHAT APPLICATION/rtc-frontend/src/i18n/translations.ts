@@ -29,6 +29,7 @@ export interface Translations {
     messagePlaceholder: string; members: string; onlineGroup: string; offlineSuffix: string;
     you: string; isTyping: string; areTyping: string; manyTyping: string;
     gifSearchPlaceholder: string; gifEmpty: string; gifLoading: string;
+    addReaction: string;
   };
   modal: {
     cancel: string; close: string; confirm: string; create: string; delete: string;
@@ -146,6 +147,7 @@ const translations: Record<Locale, Translations> = {
       gifSearchPlaceholder: 'Rechercher un GIF...',
       gifEmpty: 'Aucun résultat',
       gifLoading: 'Chargement...',
+      addReaction: 'Ajouter une réaction',
     },
     // Modals
     modal: {
@@ -321,6 +323,7 @@ const translations: Record<Locale, Translations> = {
       gifSearchPlaceholder: 'Search for a GIF...',
       gifEmpty: 'No results',
       gifLoading: 'Loading...',
+      addReaction: 'Add reaction',
     },
     // Modals
     modal: {

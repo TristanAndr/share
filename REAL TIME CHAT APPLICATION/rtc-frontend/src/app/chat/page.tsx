@@ -10,14 +10,22 @@ import {
   getMessages, editMessage, deleteMessage,
   getMembers, updateMemberRole, transferOwnership, kickMember,
   banMember, unbanMember, getBans, searchGifs,
-  getUsers, getDMMessages, editDMMessage, deleteDMMessage
+  getUsers, getDMMessages, editDMMessage, deleteDMMessage,
+  toggleReaction
 } from '@/lib/api';
 import { useLanguage } from '@/contexts/LanguageContext';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+const EMOJI_LIST = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🔥', '👏', '✅'];
+
 interface User { id: number; username: string; }
+
+interface Reaction {
+  id: number; emoji: string; userId: number;
+  user: { id: number; username: string };
+}
 
 interface Channel { id: number; name: string; serverId: number; }
 
@@ -36,6 +44,7 @@ interface Message {
   createdAt: string; userId: number;
   user: { id: number; username: string };
   channelId: number;
+  reactions: Reaction[];
 }
 
 interface OnlineUser { userId: number; username: string; }
@@ -115,6 +124,9 @@ export default function ChatPage() {
   const [banDuration, setBanDuration] = useState<string>(''); // vide = permanent
   const [bans, setBans] = useState<Ban[]>([]);
 
+  // Reaction picker
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<number | null>(null);
+
   // GIF picker
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [gifQuery, setGifQuery] = useState('');
@@ -135,6 +147,36 @@ export default function ChatPage() {
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const token = useRef('');
+
+  // ─── Notifications (Electron ou Web Notification API) ─────────────────────
+
+  function sendNotification(title: string, body: string): void {
+    if (typeof window === 'undefined') return;
+    // In Electron: use the native IPC bridge
+    if (window.electronAPI) {
+      window.electronAPI.notify(title, body);
+      return;
+    }
+    // Fallback: Web Notification API
+    if ('Notification' in window) {
+      if (Notification.permission === 'granted') {
+        new Notification(title, { body });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then((perm) => {
+          if (perm === 'granted') new Notification(title, { body });
+        });
+      }
+    }
+  }
+
+  // Request Web Notification permission on load (for non-Electron browsers)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !window.electronAPI && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    }
+  }, []);
 
   // ─── Init ─────────────────────────────────────────────────────────────────
 
@@ -170,6 +212,10 @@ export default function ChatPage() {
     socket.on('receive_message', (msg: Message) => {
       if (msg.channelId === activeChannel?.id)
         setMessages(prev => [...prev, msg]);
+      // Notify if message is from someone else and app is not focused
+      if (msg.userId !== currentUser?.id && document.hidden) {
+        sendNotification(msg.user.username, msg.content.slice(0, 100));
+      }
     });
 
     socket.on('message_updated', (msg: Message) => {
@@ -272,6 +318,10 @@ export default function ChatPage() {
       ) {
         setDmMessages(prev => [...prev, dm]);
       }
+      // Notify on incoming DMs from others
+      if (dm.senderId !== currentUser?.id) {
+        sendNotification(dm.sender.username, dm.content.slice(0, 100));
+      }
     });
 
     socket.on('dm_updated', (dm: DirectMessage) => {
@@ -280,6 +330,10 @@ export default function ChatPage() {
 
     socket.on('dm_deleted', ({ messageId }: { messageId: number }) => {
       setDmMessages(prev => prev.filter(m => m.id !== messageId));
+    });
+
+    socket.on('reaction_updated', ({ messageId, reactions }: { messageId: number; reactions: Reaction[] }) => {
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, reactions } : m));
     });
 
     socket.on('ownership_transferred', ({ serverId, newOwnerId, oldOwnerId }: {
@@ -319,6 +373,7 @@ export default function ChatPage() {
       socket.off('receive_dm');
       socket.off('dm_updated');
       socket.off('dm_deleted');
+      socket.off('reaction_updated');
     };
   }, [currentUser, activeChannel, activeServer?.id, activeDMUser]);
 
@@ -512,6 +567,25 @@ export default function ChatPage() {
 
   async function handleDeleteMessage(id: number) {
     try { await deleteMessage(id); } catch (e) { console.error(e); }
+  }
+
+  // ─── Reactions ────────────────────────────────────────────────────────────
+
+  async function handleToggleReaction(messageId: number, emoji: string) {
+    try { await toggleReaction(messageId, emoji); } catch (e) { console.error(e); }
+    setReactionPickerMsgId(null);
+  }
+
+  function groupReactions(reactions: Reaction[]): { emoji: string; count: number; users: string[]; hasMe: boolean }[] {
+    const map = new Map<string, { count: number; users: string[]; hasMe: boolean }>();
+    for (const r of reactions) {
+      const entry = map.get(r.emoji) ?? { count: 0, users: [], hasMe: false };
+      entry.count++;
+      entry.users.push(r.user.username);
+      if (r.userId === currentUser?.id) entry.hasMe = true;
+      map.set(r.emoji, entry);
+    }
+    return Array.from(map.entries()).map(([emoji, v]) => ({ emoji, ...v }));
   }
 
   // ─── DM helpers ───────────────────────────────────────────────────────────
@@ -989,8 +1063,36 @@ export default function ChatPage() {
                           {msg.content}
                         </div>
                       )}
+                      {/* Reaction pills */}
+                      {msg.reactions && msg.reactions.length > 0 && (
+                        <div className="reaction-list">
+                          {groupReactions(msg.reactions).map(({ emoji, count, users, hasMe }) => (
+                            <button
+                              key={emoji}
+                              className={`reaction-pill${hasMe ? ' reacted' : ''}`}
+                              title={users.join(', ')}
+                              onClick={() => handleToggleReaction(msg.id, emoji)}
+                            >
+                              {emoji} {count}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {/* Emoji picker */}
+                      {reactionPickerMsgId === msg.id && (
+                        <div className="reaction-picker">
+                          {EMOJI_LIST.map(e => (
+                            <button key={e} className="reaction-picker-emoji" onClick={() => handleToggleReaction(msg.id, e)}>{e}</button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="message-actions">
+                      <button
+                        className="icon-btn"
+                        title={t.chat.addReaction}
+                        onClick={() => setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id)}
+                      >😊</button>
                       {msg.userId === currentUser.id && editingId !== msg.id && (
                         <button className="icon-btn" title={t.chat.editMessage} onClick={() => startEdit(msg)}>✏️</button>
                       )}

@@ -4,10 +4,12 @@
     "module": "commonjs",
     "rootDir": "./",
     "moduleResolution": "node",
+    "ignoreDeprecations": "5.0",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": false,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["jest", "node"]
   },
   "include": ["src/**/*", "index.ts"],
   "exclude": ["node_modules"]

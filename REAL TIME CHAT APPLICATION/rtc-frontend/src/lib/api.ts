@@ -73,6 +73,10 @@ export const editMessage = (messageId: number, content: string) =>
 export const deleteMessage = (messageId: number) =>
   request(`/messages/${messageId}`, { method: 'DELETE' });
 
+// Reactions
+export const toggleReaction = (messageId: number, emoji: string) =>
+  request(`/messages/${messageId}/reactions`, { method: 'POST', body: JSON.stringify({ emoji }) });
+
 // Users
 export const getUsers = () => request('/users');
 

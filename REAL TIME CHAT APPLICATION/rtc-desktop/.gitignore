@@ -1,0 +1,20 @@
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Compiled TypeScript ───────────────────────────────────────────────────────
+dist/
+*.js.map
+
+# ── Electron build output ─────────────────────────────────────────────────────
+release/
+*.AppImage
+*.exe
+*.dmg
+*.deb
+*.rpm
+*.snap
+*.msi
+*.pkg
+linux-unpacked/
+win-unpacked/
+mac/
