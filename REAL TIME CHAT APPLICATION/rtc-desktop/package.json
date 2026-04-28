@@ -2,6 +2,7 @@
   "name": "rtc-desktop",
   "version": "1.0.0",
   "description": "Real Time Chat - Desktop Application",
+  "author": "RTC",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
@@ -27,6 +28,7 @@
   "build": {
     "appId": "com.rtc.desktop",
     "productName": "Real Time Chat",
+    "publish": null,
     "directories": {
       "output": "release"
     },
