@@ -1,7 +1,6 @@
 import jwt from 'jsonwebtoken';
 import prisma from './db';
-
-const SECRET = process.env.JWT_SECRET || 'MON_SECRET_SUPER_SECURE';
+import { SECRET } from './config';
 
 export const authMiddleware = async (req: any, res: any, next: any) => {
   const token = req.headers.authorization?.split(' ')[1];

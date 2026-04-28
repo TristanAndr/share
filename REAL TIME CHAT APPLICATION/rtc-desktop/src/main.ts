@@ -1,8 +1,9 @@
 import {
-  app, BrowserWindow, Notification, ipcMain, Menu, shell, nativeImage
+  app, BrowserWindow, Notification, ipcMain, Menu, shell
 } from 'electron';
 import * as path from 'path';
 import * as http from 'http';
+import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -86,19 +87,48 @@ function getResourcePath(...segments: string[]): string {
 
 // ─── Server management ────────────────────────────────────────────────────────
 
-function startBackend(): void {
-  const backendPath = getResourcePath('rtc-backend');
-  console.log('[Electron] Starting backend at:', backendPath);
+// Use Electron's bundled Node.js so we don't depend on system node/npm being in PATH.
+// This matters especially when the app is launched from a desktop shortcut where PATH
+// is minimal and may not include the user's node installation.
+function spawnWithElectronNode(
+  scriptPath: string,
+  args: string[],
+  options: import('child_process').SpawnOptions
+): ChildProcess {
+  return spawn(process.execPath, ['--', scriptPath, ...args], {
+    ...options,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...options.env as object },
+  });
+}
 
-  backendProcess = spawn('node', ['-e', `
-    process.chdir(${JSON.stringify(backendPath)});
-    require('dotenv').config({ path: require('path').join(${JSON.stringify(backendPath)}, '.env') });
-    require('ts-node/register');
-    require('./src/index.ts');
-  `], {
+function initDatabase(backendPath: string, dbPath: string): void {
+  const templatePath = path.join(backendPath, 'prisma', 'template.db');
+  if (fs.existsSync(templatePath)) {
+    fs.copyFileSync(templatePath, dbPath);
+    console.log('[Electron] Database initialized from template');
+  } else {
+    console.error('[Electron] template.db not found at', templatePath);
+  }
+}
+
+function startBackend(databaseUrl: string): void {
+  const backendPath = getResourcePath('rtc-backend');
+  const scriptPath = path.join(backendPath, 'dist', 'src', 'index.js');
+  console.log('[Electron] Starting backend at:', scriptPath);
+
+  // Prisma binary engine executable — needed because AppImage is read-only and
+  // Prisma can't rely on relative paths when run under ELECTRON_RUN_AS_NODE.
+  const prismaEngineDir = path.join(backendPath, 'node_modules', '.prisma', 'client');
+  const engineFiles = fs.existsSync(prismaEngineDir)
+    ? fs.readdirSync(prismaEngineDir).filter(f => f.startsWith('query-engine-') && !f.endsWith('.node'))
+    : [];
+  const engineEnv: Record<string, string> = engineFiles.length > 0
+    ? { PRISMA_QUERY_ENGINE_BINARY: path.join(prismaEngineDir, engineFiles[0]) }
+    : {};
+
+  backendProcess = spawnWithElectronNode(scriptPath, [], {
     cwd: backendPath,
-    shell: process.platform === 'win32',
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: { NODE_ENV: 'production', DATABASE_URL: databaseUrl, ...engineEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -111,12 +141,12 @@ function startBackend(): void {
 
 function startFrontend(): void {
   const frontendPath = getResourcePath('rtc-frontend');
+  const nextBin = path.join(frontendPath, 'node_modules', 'next', 'dist', 'bin', 'next');
   console.log('[Electron] Starting frontend at:', frontendPath);
 
-  frontendProcess = spawn('npm', ['run', IS_PACKAGED ? 'start' : 'dev'], {
+  frontendProcess = spawnWithElectronNode(nextBin, ['start', '-p', String(FRONTEND_PORT)], {
     cwd: frontendPath,
-    shell: true,
-    env: { ...process.env, NODE_ENV: IS_PACKAGED ? 'production' : 'development' },
+    env: { NODE_ENV: 'production' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -240,10 +270,21 @@ async function createWindow(): Promise<void> {
 
   mainWindow.show();
 
+  // Prepare a writable database path in userData (AppImage is read-only)
+  const userDataPath = app.getPath('userData');
+  const dbDir = path.join(userDataPath, 'prisma');
+  const dbPath = path.join(dbDir, 'dev.db');
+  const DATABASE_URL = `file:${dbPath}`;
+  fs.mkdirSync(dbDir, { recursive: true });
+
   // Start servers only if not already running (avoids EADDRINUSE when using start-dev.sh)
   const backendAlive = await isPortAlive(BACKEND_PORT);
   if (!backendAlive) {
-    startBackend();
+    const backendPath = getResourcePath('rtc-backend');
+    if (!fs.existsSync(dbPath)) {
+      initDatabase(backendPath, dbPath);
+    }
+    startBackend(DATABASE_URL);
   } else {
     console.log(`[Electron] Backend already running on port ${BACKEND_PORT}, skipping spawn`);
   }
@@ -260,6 +301,41 @@ async function createWindow(): Promise<void> {
 
   if (ready && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.loadURL(FRONTEND_URL);
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    const errTitle = lang === 'fr' ? 'Erreur de démarrage' : 'Startup Error';
+    const errMsg = lang === 'fr'
+      ? 'Les serveurs n\'ont pas pu démarrer dans les temps impartis.'
+      : 'The servers could not start in time.';
+    const errHint = lang === 'fr'
+      ? 'Consultez les journaux de l\'application pour plus de détails.'
+      : 'Check the application logs for details.';
+    mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              display: flex; flex-direction: column;
+              align-items: center; justify-content: center;
+              height: 100vh;
+              background: #1e1f22;
+              color: #ffffff;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+              padding: 2rem; text-align: center;
+            }
+            h1 { font-size: 1.5rem; margin-bottom: 1rem; color: #ed4245; }
+            p { color: #b5bac1; font-size: 0.9rem; margin-top: 0.5rem; }
+          </style>
+        </head>
+        <body>
+          <h1>⚠ ${errTitle}</h1>
+          <p>${errMsg}</p>
+          <p>${errHint}</p>
+        </body>
+      </html>
+    `)}`);
   }
 
   mainWindow.on('closed', () => {
