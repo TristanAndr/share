@@ -1,7 +1,7 @@
 # Données lourdes : à ne jamais committer (> 100 Mo, limite GitHub)
 *.osm.pbf
 *.gpkg
-Filosofi2021_carreaux_200m_*/
+carreaux_200m/carreaux_200m_met.csv
 .venv/
 .DS_Store
 ~$*
